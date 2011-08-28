@@ -19,14 +19,11 @@
 
 namespace Doctrine\Common\Annotations;
 
-use Doctrine\Common\Annotations\Annotation\IgnoreAnnotation;
 use Doctrine\Common\Annotations\Annotation\Target;
 use Closure;
 use ReflectionClass;
 use ReflectionMethod;
 use ReflectionProperty;
-
-require_once __DIR__ . '/Annotation/IgnoreAnnotation.php';
 
 /**
  * A reader for docblock annotations.
@@ -39,15 +36,6 @@ require_once __DIR__ . '/Annotation/IgnoreAnnotation.php';
  */
 final class AnnotationReader implements Reader
 {
-    /**
-     * Global map for imports.
-     *
-     * @var array
-     */
-    private static $globalImports = array(
-        'ignoreannotation' => 'Doctrine\Common\Annotations\Annotation\IgnoreAnnotation',
-    );
-
     /**
      * A list with annotations that are not causing exceptions when not resolved to an annotation class.
      *
@@ -121,15 +109,7 @@ final class AnnotationReader implements Reader
      */
     public function __construct()
     {
-        AnnotationRegistry::registerFile(__DIR__ . '/Annotation/IgnoreAnnotation.php');
-
         $this->parser = new DocParser;
-
-        $this->preParser = new DocParser;
-        $this->preParser->setImports(self::$globalImports);
-        $this->preParser->setIgnoreNotImportedAnnotations(true);
-
-        $this->phpParser = new PhpParser;
     }
 
     /**
@@ -141,9 +121,9 @@ final class AnnotationReader implements Reader
      */
     public function getClassAnnotations(ReflectionClass $class)
     {
+        $this->parser->setTargetClass($class);
         $this->parser->setTarget(Target::TARGET_CLASS);
-        $this->parser->setImports($this->getImports($class));
-        $this->parser->setIgnoredAnnotationNames($this->getIgnoredAnnotationNames($class));
+        $this->parser->setIgnoredAnnotationNames(self::$globalIgnoredNames);
 
         return $this->parser->parse($class->getDocComment(), 'class ' . $class->getName());
     }
@@ -180,9 +160,9 @@ final class AnnotationReader implements Reader
     {
         $class = $property->getDeclaringClass();
         $context = 'property ' . $class->getName() . "::\$" . $property->getName();
+        $this->parser->setTargetClass($class);
         $this->parser->setTarget(Target::TARGET_PROPERTY);
-        $this->parser->setImports($this->getImports($class));
-        $this->parser->setIgnoredAnnotationNames($this->getIgnoredAnnotationNames($class));
+        $this->parser->setIgnoredAnnotationNames(self::$globalIgnoredNames);
 
         return $this->parser->parse($property->getDocComment(), $context);
     }
@@ -218,9 +198,9 @@ final class AnnotationReader implements Reader
     {
         $class = $method->getDeclaringClass();
         $context = 'method ' . $class->getName() . '::' . $method->getName() . '()';
+        $this->parser->setTargetClass($class);
         $this->parser->setTarget(Target::TARGET_METHOD);
-        $this->parser->setImports($this->getImports($class));
-        $this->parser->setIgnoredAnnotationNames($this->getIgnoredAnnotationNames($class));
+        $this->parser->setIgnoredAnnotationNames(self::$globalIgnoredNames);
 
         return $this->parser->parse($method->getDocComment(), $context);
     }

@@ -22,6 +22,7 @@ namespace Doctrine\Common\Annotations;
 use Closure;
 use ReflectionClass;
 use Doctrine\Common\Annotations\Annotation\Target;
+use Doctrine\Common\Annotations\Annotation\IgnoreAnnotation;
 
 /**
  * A parser for docblock annotations.
@@ -57,13 +58,26 @@ final class DocParser
      * @var string
      */
     private $target;
-
+    /**
+     * Current target class
+     *
+     * @var \ReflectionClass
+     */
+    private $targetClass;
+    
     /**
      * Doc Parser used to collect annotation target
      *
      * @var Doctrine\Common\Annotations\DocParser
      */
     private static $metadataParser;
+    
+    /**
+     * PhpParser used to collect target class metadata
+     *
+     * @var Doctrine\Common\Annotations\PhpParser
+     */
+    private static $metadataPhpParser;
 
     /**
      * Flag to control if the current annotation is nested or not.
@@ -132,6 +146,12 @@ final class DocParser
             'is_annotation'    => true,
         ),
     );
+    
+     /**
+     * Hash-map for caching target class metadata
+     * @var array
+     */
+    private static $targetClassMetadata = array();
 
     /**
      * Hash-map for handle types declaration
@@ -164,7 +184,12 @@ final class DocParser
     {
         $this->ignoredAnnotationNames = $names;
     }
-
+    
+    /**
+     * Signal to the parser to ignore all not imported annotations during the parsing process.
+     * 
+     * @param boolean $bool 
+     */
     public function setIgnoreNotImportedAnnotations($bool)
     {
         $this->ignoreNotImportedAnnotations = (Boolean) $bool;
@@ -172,6 +197,7 @@ final class DocParser
 
     /**
      * Sets the default namespaces.
+     * 
      * @param array $namespaces
      */
     public function addNamespace($namespace)
@@ -179,15 +205,31 @@ final class DocParser
         if ($this->imports) {
             throw new \RuntimeException('You must either use addNamespace(), or setImports(), but not both.');
         }
-        $this->namespaces[] = $namespace;
+        $this->namespaces[$namespace] = $namespace;
+        
+        foreach (self::$targetClassMetadata as $class => $metadata) {
+            self::$targetClassMetadata[$class]['namespaces'][$namespace] = $namespace;
+        }
     }
 
+     /**
+     * Sets the default inports.
+     * 
+     * @param array $namespaces
+     */
     public function setImports(array $imports)
     {
         if ($this->namespaces) {
             throw new \RuntimeException('You must either use addNamespace(), or setImports(), but not both.');
         }
         $this->imports = $imports;
+        
+        foreach (self::$targetClassMetadata as $class => $metadata){
+            foreach ($imports as $alias => $fullName){
+                self::$targetClassMetadata[$class]['imports'][$alias] = $fullName;
+            }
+        }
+        
     }
 
      /**
@@ -198,6 +240,16 @@ final class DocParser
     public function setTarget($target)
     {
         $this->target = $target;
+    }
+    
+    /**
+     * Sets current target context as bitmask.
+     *
+     * @param \ReflectionClass $class
+     */
+    public function setTargetClass(ReflectionClass $class)
+    {
+        $this->targetClass = $class;
     }
 
     /**
@@ -312,6 +364,111 @@ final class DocParser
     }
 
     /**
+     * 
+     */
+    private function initMetadataParser()
+    {
+        if(self::$metadataParser === null){
+            self::$metadataParser = new self();
+            self::$metadataParser->setTarget(Target::TARGET_CLASS);
+            self::$metadataParser->setIgnoreNotImportedAnnotations(true);
+            self::$metadataParser->setImports(array(
+                'target' => 'Doctrine\Common\Annotations\Annotation\Target',
+                'ignoreannotation' => 'Doctrine\Common\Annotations\Annotation\IgnoreAnnotation'
+            ));
+            AnnotationRegistry::registerFile(__DIR__ . '/Annotation/Target.php');
+            AnnotationRegistry::registerFile(__DIR__ . '/Annotation/IgnoreAnnotation.php');
+        }
+    }
+    
+    /**
+     * @param   string $name
+     * @return  string 
+     */
+    private function annotationClassName($name)
+    {
+        $fullName = null;
+        if ('\\' !== $name[0] && !$this->classExists($name)) {
+            
+            $pos            = strpos($name, '\\');
+            $alias          = (false === $pos) ? $name : substr($name, 0, $pos);
+            $loweredAlias   = strtolower($alias);
+            
+            $imports        = $this->imports;
+            $namespaces     = $this->namespaces;
+                
+            if($this->targetClass != null){
+                $imports        = array_merge(self::$targetClassMetadata[$this->targetClass->name]['imports'],$imports);
+                $namespaces     = array_merge(self::$targetClassMetadata[$this->targetClass->name]['namespaces'],$namespaces);
+            }
+            
+            if (isset($imports[$loweredAlias])){
+                if (false !== $pos) {
+                    $fullName = $imports[$loweredAlias].substr($name, $pos);
+                } else {
+                    $fullName = $imports[$loweredAlias];
+                }
+            }else {
+                if($namespaces){
+                    foreach ($namespaces as $namespace) {
+                        if ($this->classExists($namespace . '\\' . $name)) {
+                            $fullName = $namespace . '\\' . $name;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if($this->targetClass != null){
+            self::$targetClassMetadata[$this->targetClass->name][$name] = $fullName;
+        }
+        
+        return $fullName;
+    }
+    
+    /**
+     * Collects parsing metadata for a given class
+     *
+     * @param ReflectionClass $class
+     */
+    private function collectTargetClassMetadata()
+    {
+        if(self::$metadataParser == null){
+            $this->initMetadataParser();
+        }
+        
+        if(self::$metadataPhpParser == null){
+            self::$metadataPhpParser = new PhpParser();
+        }
+        
+        $namespace = $this->targetClass->getNamespaceName();
+        
+        $metadata  = array(
+            'annotations'   => array(),
+            'imports'       => $this->imports,
+            'namespaces'    => $this->namespaces,
+            'ignored'       => $this->ignoredAnnotationNames,
+        );
+        
+        $metadata[$namespace] = $namespace;
+        
+        foreach (self::$metadataParser->parse($this->targetClass->getDocComment(), 'class '.$this->targetClass->name) as $annotation) {
+            if ($annotation instanceof IgnoreAnnotation){
+                foreach ($annotation->names as $annot) {
+                    $metadata['ignored'][$annot] = true;
+                }
+            }
+        }
+        
+        foreach (self::$metadataPhpParser->parseClass($this->targetClass) as $alias => $fullName) {
+            $metadata['imports'][$alias] = $fullName;
+        }
+        
+        self::$targetClassMetadata[$this->targetClass->name] = $metadata;
+    }
+    
+    
+    /**
      * Collects parsing metadata for a given annotation class
      *
      * @param   string $name        The annotation name
@@ -319,13 +476,7 @@ final class DocParser
     private function collectAnnotationMetadata($name)
     {
         if(self::$metadataParser == null){
-            self::$metadataParser = new self();
-            self::$metadataParser->setTarget(Target::TARGET_CLASS);
-            self::$metadataParser->setIgnoreNotImportedAnnotations(true);
-            self::$metadataParser->setImports(array(
-                'target' => 'Doctrine\Common\Annotations\Annotation\Target'
-            ));
-            AnnotationRegistry::registerFile(__DIR__ . '/Annotation/Target.php');
+            $this->initMetadataParser();
         }
 
         $class      = new \ReflectionClass($name);
@@ -462,40 +613,30 @@ final class DocParser
             $this->matchAny(self::$classIdentifiers);
             $name .= '\\'.$this->lexer->token['value'];
         }
-
+        
         // only process names which are not fully qualified, yet
-        $originalName = $name;
-        if ('\\' !== $name[0] && !$this->classExists($name)) {
-            $alias = (false === $pos = strpos($name, '\\'))? $name : substr($name, 0, $pos);
-
-            $found = false;
-            if ($this->namespaces) {
-                foreach ($this->namespaces as $namespace) {
-                    if ($this->classExists($namespace.'\\'.$name)) {
-                        $name = $namespace.'\\'.$name;
-                        $found = true;
-                        break;
-                    }
-                }
-            } elseif (isset($this->imports[$loweredAlias = strtolower($alias)])) {
-                if (false !== $pos) {
-                    $name = $this->imports[$loweredAlias].substr($name, $pos);
-                } else {
-                    $name = $this->imports[$loweredAlias];
-                }
-                $found = true;
-            } elseif (isset($this->imports['__NAMESPACE__']) && $this->classExists($this->imports['__NAMESPACE__'].'\\'.$name)) {
-                 $name = $this->imports['__NAMESPACE__'].'\\'.$name;
-                 $found = true;
+        $originalName  = $name;
+        
+        if ($this->targetClass != null) {
+            // collects the metadata annotation only if there is not yet
+            if (!isset(self::$targetClassMetadata[$this->targetClass->name])) {
+                $this->collectTargetClassMetadata();
             }
-
-            if (!$found) {
-                if ($this->ignoreNotImportedAnnotations || isset($this->ignoredAnnotationNames[$name])) {
-                    return false;
-                }
-
-                throw AnnotationException::semanticalError(sprintf('The annotation "@%s" in %s was never imported.', $name, $this->context));
+            
+            if (isset(self::$targetClassMetadata[$this->targetClass->name]['annotations'][$name])) {
+                $name  = self::$targetClassMetadata[$this->targetClass->name]['annotations'][$name];
+            }else{
+                $name  = $this->annotationClassName($name);
             }
+        }else{
+            $name  = $this->annotationClassName($name);
+        }
+        
+        if ($name === null) {
+            if ($this->ignoreNotImportedAnnotations || isset($this->ignoredAnnotationNames[$name]) || !isset(self::$targetClassMetadata[$this->targetClass->name]['ignored'][$name])){
+                return false;
+            }
+            throw AnnotationException::semanticalError(sprintf('The annotation "@%s" in %s was never imported.', $originalName, $this->context));
         }
 
         if (!$this->classExists($name)) {
