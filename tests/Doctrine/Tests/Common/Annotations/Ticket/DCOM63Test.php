@@ -21,24 +21,16 @@ class DCOM63Test extends \PHPUnit_Framework_TestCase
     protected function getReader()
     {
         if (!is_dir(self::$cacheDir)) {
-            rmdir(self::$cacheDir);
+           mkdir(self::$cacheDir);
         }
+        
         return new FileCacheReader(new AnnotationReader(), self::$cacheDir, true);
     }
     
     static function setUpBeforeClass()
     {
-        if(self::$cacheDir == null){
-            self::$cacheDir = sys_get_temp_dir() . "/annotations_dcom63_". uniqid();
-            self::$cacheDir = "/Users/fabio/backup/temp/";
-        }
-        
-        foreach (glob(self::$cacheDir.'/*.php') as $file) {
-            unlink($file);
-        }
+        self::$cacheDir = __DIR__ . "/tmp/annotations_dcom63";
     }
-    
-    
     
     /**
      * @runInSeparateProcess
@@ -46,9 +38,8 @@ class DCOM63Test extends \PHPUnit_Framework_TestCase
     public function testSetDefaultRoutePattern()
     {
         $this->changeRoutePattern("/person");
-        $this->assertEquals($this->getClassFileContent("DCOM63Person"), $this->getTplContent("/person"));
+        $this->assertEquals(self::getClassFileContent("DCOM63Person"), self::getTplContent("/person"));
     }
-    
     
     /**
      * @runInSeparateProcess
@@ -56,15 +47,17 @@ class DCOM63Test extends \PHPUnit_Framework_TestCase
      */
     public function testReadPropertyAnnotations()
     {
-        include 'DCOM63Person.php';
-        include 'DCOM63Employee.php';
+        include __DIR__ .'/DCOM63Person.php';
+        include __DIR__ .'/DCOM63Employee.php';
         
         $property   = new \ReflectionProperty(__NAMESPACE__. "\DCOM63Employee","route");
         $annots     = $this->getReader()->getPropertyAnnotations($property);
+        $content    = self::getClassFileContent("DCOM63Person");
+        $tpl        = self::getTplContent("/person");
         
+        $this->assertEquals($content,$tpl);
         $this->assertEquals(sizeof($annots),1);
         $this->assertEquals($annots[0]->pattern,"/person");
-        $this->assertEquals($this->getClassFileContent("DCOM63Person"), $this->getTplContent("/person"));
     }
     
     
@@ -75,7 +68,7 @@ class DCOM63Test extends \PHPUnit_Framework_TestCase
     public function testSetOtherRoutePattern()
     {
         $this->changeRoutePattern("/employee");
-        $this->assertEquals($this->getClassFileContent("DCOM63Person"), $this->getTplContent("/employee"));
+        $this->assertEquals(self::getClassFileContent("DCOM63Person"), self::getTplContent("/employee"));
     }
     
     
@@ -85,45 +78,45 @@ class DCOM63Test extends \PHPUnit_Framework_TestCase
      */
     public function testIssue()
     {
-        include 'DCOM63Person.php';
-        include 'DCOM63Employee.php';
+        include __DIR__ .'/DCOM63Person.php';
+        include __DIR__ .'/DCOM63Employee.php';
         
         $property   = new \ReflectionProperty(__NAMESPACE__. "\DCOM63Employee","route");
         $annots     = $this->getReader()->getPropertyAnnotations($property);
+        $content    = self::getClassFileContent("DCOM63Person");
+        $tpl        = self::getTplContent("/employee");
         
+        $this->assertEquals($content,$tpl);
         $this->assertEquals(sizeof($annots),1);
         $this->assertEquals($annots[0]->pattern,"/employee");
-        $this->assertEquals($this->getClassFileContent("DCOM63Person"), $this->getTplContent("/employee"));
     }
     
     
     
-    private function changeRoutePattern($pattern)
+    
+    
+    private static function changeRoutePattern($pattern)
     {
-        $content    = $this->getTplContent($pattern);
-        $filename   = $this->getClassFileName("DCOM63Person");
-        
+        $content    = self::getTplContent($pattern);
+        $filename   = self::getClassFileName("DCOM63Person");
         file_put_contents($filename, $content);
     }
     
-    private function getClassFileContent($class)
+    private static function getClassFileContent($class)
     {
-        $filename = $this->getClassFileName($class);
-        return file_get_contents($filename);
+        return file_get_contents(self::getClassFileName($class));
     }
     
-    private function getClassFileName($class)
+    private static function getClassFileName($class)
     {
         $class = new \ReflectionClass(__NAMESPACE__. '\\' . $class);
         return $class->getFileName();
     }
     
-    private function getTplContent($pattern)
+    private static function getTplContent($pattern)
     {
         return str_replace("<pattern/>", $pattern, self::CLASS_TPL);
     }
-
-
 
 
     const CLASS_TPL = '<?php
